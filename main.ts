@@ -1,16 +1,40 @@
-import { Plugin, App, OpenViewState, Workspace, WorkspaceLeaf, MarkdownView } from "obsidian";
+import { App, OpenViewState, Plugin, PluginSettingTab, Setting, Workspace, WorkspaceLeaf } from "obsidian";
 import { around } from 'monkey-around';
 
+interface OpenInNewTabSettings {
+	openInLastActiveTab: boolean;
+}
+
+const DEFAULT_SETTINGS: OpenInNewTabSettings = {
+	openInLastActiveTab: false,
+};
 
 export default class OpenInNewTabPlugin extends Plugin {
 	uninstallMonkeyPatch: () => void;
+	settings: OpenInNewTabSettings;
+	lastActiveLeaf: WorkspaceLeaf | null = null;
 
 	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new OpenInNewTabSettingTab(this.app, this));
+
 		this.monkeyPatchOpenLinkText();
 
 		this.registerDomEvent(document, "click", this.generateClickHandler(this.app), {
 			capture: true,
 		});
+
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (!leaf) {
+					return;
+				}
+				const viewType = leaf.view?.getViewType();
+				if (viewType && viewType !== "file-explorer") {
+					this.lastActiveLeaf = leaf;
+				}
+			})
+		);
 	}
 
 	onunload(): void {
@@ -74,6 +98,14 @@ export default class OpenInNewTabPlugin extends Plugin {
 	}
 
 
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
+
 	generateClickHandler(appInstance: App) {
 		return function (event: MouseEvent) {
 			const target = event.target as Element;
@@ -114,11 +146,42 @@ export default class OpenInNewTabPlugin extends Plugin {
 
 					if (!result) {
 						event.stopPropagation(); // This might break something...
+						if (this.settings.openInLastActiveTab && this.lastActiveLeaf) {
+							appInstance.workspace.setActiveLeaf(this.lastActiveLeaf);
+							appInstance.workspace.openLinkText(path, path, false);
+							return;
+						}
 						appInstance.workspace.openLinkText(path, path, true);
 					}
 				}
 			}
-		}
+		}.bind(this)
 	}
 }
 
+class OpenInNewTabSettingTab extends PluginSettingTab {
+	plugin: OpenInNewTabPlugin;
+
+	constructor(app: App, plugin: OpenInNewTabPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Open files in last active tab")
+			.setDesc("When enabled, clicks in the file explorer reuse the last active tab instead of opening a new one.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.openInLastActiveTab)
+					.onChange(async (value) => {
+						this.plugin.settings.openInLastActiveTab = value;
+						await this.plugin.saveSettings();
+					})
+			);
+	}
+}
