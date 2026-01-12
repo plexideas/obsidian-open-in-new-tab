@@ -1,11 +1,22 @@
-import { Plugin, App, OpenViewState, Workspace, WorkspaceLeaf, MarkdownView } from "obsidian";
+import { App, OpenViewState, Plugin, PluginSettingTab, Setting, Workspace, WorkspaceLeaf } from "obsidian";
 import { around } from 'monkey-around';
 
+interface OpenInNewTabSettings {
+	openNewTabsAtEnd: boolean;
+}
+
+const DEFAULT_SETTINGS: OpenInNewTabSettings = {
+	openNewTabsAtEnd: false,
+};
 
 export default class OpenInNewTabPlugin extends Plugin {
 	uninstallMonkeyPatch: () => void;
+	settings: OpenInNewTabSettings;
 
 	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new OpenInNewTabSettingTab(this.app, this));
+
 		this.monkeyPatchOpenLinkText();
 
 		this.registerDomEvent(document, "click", this.generateClickHandler(this.app), {
@@ -74,6 +85,14 @@ export default class OpenInNewTabPlugin extends Plugin {
 	}
 
 
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
+
 	generateClickHandler(appInstance: App) {
 		return function (event: MouseEvent) {
 			const target = event.target as Element;
@@ -114,11 +133,42 @@ export default class OpenInNewTabPlugin extends Plugin {
 
 					if (!result) {
 						event.stopPropagation(); // This might break something...
+						if (this.settings.openNewTabsAtEnd) {
+							const leaf = appInstance.workspace.getLeaf("tab");
+							leaf.openLinkText(path, path);
+							return;
+						}
 						appInstance.workspace.openLinkText(path, path, true);
 					}
 				}
 			}
-		}
+		}.bind(this)
 	}
 }
 
+class OpenInNewTabSettingTab extends PluginSettingTab {
+	plugin: OpenInNewTabPlugin;
+
+	constructor(app: App, plugin: OpenInNewTabPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Open new tabs at the end")
+			.setDesc("When enabled, new tabs opened from the file explorer are added to the end of the tab list.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.openNewTabsAtEnd)
+					.onChange(async (value) => {
+						this.plugin.settings.openNewTabsAtEnd = value;
+						await this.plugin.saveSettings();
+					})
+			);
+	}
+}
